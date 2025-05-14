@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# Color codes
+BLUE='\033[1;34m' GREEN='\033[1;32m' RED='\033[1;31m' YELLOW='\033[1;33m'
+CYAN='\033[1;36m' MAGENTA='\033[1;35m' NC='\033[0m' BOLD='\033[1m'
+
+# Logging functions
+log_info() { echo -e "${CYAN}>> ${NC}$1"; }
+log_warning() { echo -e "${YELLOW}${BOLD}>> WARNING:${NC} ${YELLOW}$1${NC}"; }
+log_error() { echo -e "${RED}${BOLD}>> ERROR:${NC} ${RED}${BOLD}$1${NC}"; }
+log_success() { echo -e "${GREEN}${BOLD}>> SUCCESS:${NC} ${GREEN}${BOLD}$1${NC}"; }
+log_step() { echo -e "${BLUE}${BOLD}>> STEP:${NC} ${BLUE}${BOLD}$1${NC}"; }
+
+# Check if git is installed
+check_git() { command -v git &> /dev/null || { log_error "Git is required. Install it."; exit 1; }; }
+
+# Main menu
+main_menu() {
+    clear
+    echo -e "${MAGENTA}${BOLD}--------------------------------------${NC}"
+    echo -e "${MAGENTA}${BOLD}  UNIVERSAL Firmware Build  ${NC}"
+    echo -e "${MAGENTA}${BOLD}--------------------------------------${NC}"
+    echo -e "${BLUE}${BOLD}Select firmware distribution:${NC}"
+    echo "1) OpenWrt"
+    echo "2) OpenWrt-IPQ"
+    echo "3) ImmortalWrt"
+    while true; do
+        read -r -p "Enter choice [1/2/3]: " choice
+        case "$choice" in
+            1) distro="openwrt"; repo="https://github.com/openwrt/openwrt.git"; deps=(build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget); log_info "Selected: OpenWrt"; break ;;
+            2) distro="openwrt-ipq"; repo="https://github.com/qosmio/openwrt-ipq.git"; deps=(build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget); log_info "Selected: OpenWrt-IPQ"; break ;;
+            3) distro="immortalwrt"; repo="https://github.com/immortalwrt/immortalwrt.git"; deps=(ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd); log_info "Selected: ImmortalWrt"; break ;;
+            *) log_error "Invalid selection."; ;;
+        esac
+    done
+}
+
+# Update feeds
+update_feeds() {
+    log_step "Updating package lists (feeds)..."
+    ./scripts/feeds update -a && ./scripts/feeds install -a || return 1
+    read -r -p "${BLUE}Press Enter after editing custom feeds... ${NC}"
+    log_step "Applying feed changes..."
+    ./scripts/feeds update -a && ./scripts/feeds install -a || return 1
+    log_success "Package lists (feeds) are ready."
+}
+
+# Select branch/tag
+select_target() {
+    log_step "Selecting target branch or tag..."
+    log_info "Available branches:"; git branch -a | while read -r b; do log_info "  $b"; done
+    log_info "Available tags:"; git tag | sort -V | while read -r t; do log_info "  $t"; done
+    while true; do
+        read -r -p "${BLUE}Enter branch/tag to checkout: ${NC}" target_tag
+        git checkout "$target_tag" && { log_success "Checked out to: $target_tag"; break; }
+        log_error "Invalid selection."
+    done
+}
+
+# Apply seed config
+apply_seed_config() {
+    [[ "$distro" == "openwrt-ipq" ]] || return
+    log_step "Applying initial configuration..."
+    cp nss-setup/config-nss.seed .config
+    make defconfig
+    log_success "Initial configuration applied."
+}
+
+# Run menuconfig
+run_menuconfig() { log_step "Launching configuration menu..."; make menuconfig && log_success "Configuration saved." || log_error "Configuration menu issues."; }
+
+# Show build output location
+show_output_location() { log_info "Firmware output: ${YELLOW}$(pwd)/bin/targets/${NC}"; }
+
+# Start build
+start_build() {
+    log_step "Starting firmware build..."
+    local MAKE_J=$(nproc)
+    log_info "Using make -j${MAKE_J} based on available CPU cores."
+    log_info "This may take a while."
+
+    while true; do
+        local start_time=$(date +%s)
+        make -j"${MAKE_J}" && {
+            local duration=$(( $(date +%s) - start_time ))
+            local hours=$((duration / 3600)) minutes=$(((duration % 3600) / 60)) seconds=$((duration % 60))
+            log_success "Build successful! Time: ${hours}h ${minutes}m ${seconds}s."
+            show_output_location
+            break
+        }
+        log_error "Build failed! Showing verbose output for debugging..."
+        make -j1 V=s
+        read -r -p "${RED}Fix errors, then press Enter to retry full process... ${NC}"
+        update_feeds; make defconfig; run_menuconfig
+    done
+}
+
+# Fresh build
+fresh_build() {
+    log_step "Starting a clean build for $distro..."
+    if [ -d "$distro" ]; then
+        read -r -p "${YELLOW}Directory '$distro' exists. Delete? [y/N]: ${NC}" confirm_delete
+        [[ "$confirm_delete" =~ ^[Yy]$ ]] && { log_info "Removing '$distro'..."; rm -rf "$distro" || { log_error "Failed to remove."; return 1; }; } || { log_info "Keeping '$distro'. Proceeding with rebuild."; pushd "$distro" > /dev/null || return 1; rebuild_menu; popd > /dev/null; return 0; }
+    fi
+    log_step "Cloning repository..."
+    git clone "$repo" "$distro" || { log_error "Failed to clone. Check network/URL."; return 1; }
+    pushd "$distro" > /dev/null || return 1
+    update_feeds || return 1
+    select_target
+    apply_seed_config
+    run_menuconfig
+    start_build
+    popd > /dev/null
+}
+
+# Rebuild menu
+rebuild_menu() {
+    log_step "Rebuilding $distro..."
+    pushd "$distro" > /dev/null || { log_error "Failed to enter '$distro'."; return 1; }
+    while true; do
+        read -r -p "${BLUE}${BOLD}Select rebuild option [1/2]: ${NC}" rebuild_choice
+        case "$rebuild_choice" in
+            1) log_info "Updating Packages & Firmware..."; make distclean; update_feeds; select_target; run_menuconfig; start_build; break ;;
+            2) log_info "Rebuilding with current settings..."; make -j"$(nproc)" && { log_success "Rebuild completed."; show_output_location; break; } || { log_error "Rebuild failed. Initiating full recovery..."; update_feeds; make defconfig; run_menuconfig; start_build; break; } ;;
+            *) log_error "Invalid selection."; ;;
+        esac
+    done
+    popd > /dev/null
+}
+
+# Cleanup
+[[ "$1" == "--clean" ]] && { log_step "Cleaning up..."; echo -e "${BLUE}Manual cleanup may be needed.${NC}"; [ -f "$script_file" ] && rm -f "$script_file" && log_info "Removed script."; log_success "Cleanup done."; exit 0; }
+
+# Main logic
+check_git
+main_menu
+
+if [ -d "$distro" ]; then
+    while true; do
+        read -r -p "${BLUE}Directory '$distro' exists. Fresh build or rebuild? [1/2]: ${NC}" build_type
+        case "$build_type" in
+            1) fresh_build; break ;;
+            2) rebuild_menu; break ;;
+            *) log_error "Invalid selection."; ;;
+        esac
+    done
+else
+    log_step "Installing required packages..."
+    sudo apt update -y > /dev/null 2>&1
+    sudo apt install -y "${deps[@]}" > /dev/null 2>&1
+    log_success "Dependencies installed."
+    fresh_build
+fi
+
+log_info "Script finished. Cleaning up..."
+rm -f "$script_file"
+log_success "Cleanup complete."
