@@ -12,21 +12,28 @@ jobs:
   clone_and_push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target repo (this repo)
+      - name: Checkout your repository (target)
         uses: actions/checkout@v3
 
       - name: Clone input repository
         run: |
           echo "Cloning ${{ github.event.inputs.source_repo }}"
-          git clone --depth=1 "${{ github.event.inputs.source_repo }}" external
+          git clone --depth=1 "${{ github.event.inputs.source_repo }}" external || exit 1
 
-      - name: Configure Git and push to this repo
+          if [ ! -d "external" ] || [ -z "$(ls -A external)" ]; then
+            echo "❌ Clone failed or repo is empty"
+            exit 1
+          fi
+
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Clean current contents (optional)
-          rm -rf ./*
+      - name: Replace and push to main branch
+        run: |
+          echo "Replacing current repo contents with cloned repo..."
+          rm -rf ./* .[^.]* || true
           mv external/* ./
           rm -rf external
 
