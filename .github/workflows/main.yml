@@ -15,16 +15,21 @@ jobs:
       - name: Checkout your repository (target)
         uses: actions/checkout@v3
 
-      - name: Clone input repository
+      - name: Clone input repository with full logging
         run: |
-          echo "Cloning ${{ github.event.inputs.source_repo }}"
-          git clone --depth=1 "${{ github.event.inputs.source_repo }}" external || exit 1
+          echo "Cloning repo: ${{ github.event.inputs.source_repo }}"
+          git clone --depth=1 "${{ github.event.inputs.source_repo }}" external
 
-          echo "Cloned files:"
-          ls -al external
+          echo "Checking contents of 'external/'..."
+          if [ ! -d external ]; then
+            echo "❌ 'external/' directory does not exist. Clone failed."
+            exit 1
+          fi
 
-          if [ ! -d "external" ] || [ -z "$(ls -A external)" ]; then
-            echo "❌ Clone failed or repo is empty"
+          ls -la external
+
+          if [ -z "$(ls -A external)" ]; then
+            echo "❌ 'external/' is empty. Nothing to sync."
             exit 1
           fi
 
@@ -36,8 +41,10 @@ jobs:
       - name: Replace and push to main branch
         run: |
           echo "Replacing current repo contents with cloned repo..."
+
           rm -rf ./* .[^.]* || true
-          
+
+          echo "Copying files..."
           rsync -a external/ ./
           rm -rf external
 
