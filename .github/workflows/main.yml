@@ -21,6 +21,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Clone source repo to temp directory
+        id: clone
         run: |
           tempdir=$(mktemp -d)
           echo "Cloning repo: ${{ github.event.inputs.source_repo }}"
@@ -28,23 +29,21 @@ jobs:
           echo "Cloned repo contents:"
           ls -la "$tempdir"
           echo "::set-output name=tempdir::$tempdir"
-        id: clone
 
       - name: Create orphan branch and replace contents
         run: |
           # Create orphan branch with no history
           git checkout --orphan temp-sync-branch
 
-          # Remove all files from the index (not from disk)
-          git rm -rf . || true
+          # NO 'git rm -rf .' here to avoid fatal parse HEAD error
 
-          # Copy cloned files from tempdir to current directory
+          # Copy cloned files from tempdir to current directory (overwrite)
           rsync -a --delete "${{ steps.clone.outputs.tempdir }}/" ./
 
-          # Stage all files
+          # Stage all files for commit
           git add .
 
-          # Commit changes
+          # Commit all files as initial commit on orphan branch
           git commit -m "Sync from ${{ github.event.inputs.source_repo }} (orphan branch)"
 
       - name: Force push orphan branch to main
