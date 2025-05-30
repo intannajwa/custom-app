@@ -26,27 +26,29 @@ jobs:
           tempdir=$(mktemp -d)
           echo "Cloning repo: ${{ github.event.inputs.source_repo }}"
           git clone --depth=1 "${{ github.event.inputs.source_repo }}" "$tempdir"
-          echo "Cloned repo contents:"
-          ls -la "$tempdir"
           echo "::set-output name=tempdir::$tempdir"
 
-      - name: Create orphan branch and replace contents
+      - name: Create branch and replace contents
         run: |
-          # Create orphan branch with no history
-          git checkout --orphan temp-sync-branch
+          # Check if repo has commits
+          if git rev-parse --verify HEAD >/dev/null 2>&1; then
+            # Repo has commits, create orphan branch (no history)
+            git checkout --orphan temp-sync-branch
+          else
+            # Repo empty, create new branch normally
+            git checkout -b temp-sync-branch
+          fi
 
-          # NO 'git rm -rf .' here to avoid fatal parse HEAD error
+          # No 'git rm -rf .' needed here, orphan branch is empty
 
-          # Copy cloned files from tempdir to current directory (overwrite)
+          # Copy cloned repo files into current directory
           rsync -a --delete "${{ steps.clone.outputs.tempdir }}/" ./
 
-          # Stage all files for commit
+          # Stage and commit all files
           git add .
-
-          # Commit all files as initial commit on orphan branch
           git commit -m "Sync from ${{ github.event.inputs.source_repo }} (orphan branch)"
 
-      - name: Force push orphan branch to main
+      - name: Force push to main branch
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
