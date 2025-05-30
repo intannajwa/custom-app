@@ -12,13 +12,13 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout current repository (needed for git commands)
+      - name: Checkout current repository (just for workflow context)
         uses: actions/checkout@v3
 
       - name: Configure git user and email
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Clone source repo to temp directory
         id: clone
@@ -28,28 +28,30 @@ jobs:
           git clone --depth=1 "${{ github.event.inputs.source_repo }}" "$tempdir"
           echo "::set-output name=tempdir::$tempdir"
 
-      - name: Create branch and replace contents
+      - name: Prepare clean git repo
         run: |
-          # Check if repo has commits
-          if git rev-parse --verify HEAD >/dev/null 2>&1; then
-            # Repo has commits, create orphan branch (no history)
-            git checkout --orphan temp-sync-branch
-          else
-            # Repo empty, create new branch normally
-            git checkout -b temp-sync-branch
-          fi
+          # Clean current directory except .git folder and workflow files
+          shopt -s extglob
+          rm -rf !( .git|.github )
 
-          # No 'git rm -rf .' needed here, orphan branch is empty
+          # Remove old git history (dangerous: wipes all commits)
+          rm -rf .git
 
-          # Copy cloned repo files into current directory
+          # Reinitialize git fresh repo
+          git init
+
+          # Add remote to your repo
+          git remote add origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
+
+          # Copy cloned repo contents to current dir
           rsync -a --delete "${{ steps.clone.outputs.tempdir }}/" ./
 
-          # Stage and commit all files
+          # Stage all files
           git add .
-          git commit -m "Sync from ${{ github.event.inputs.source_repo }} (orphan branch)"
+
+          # Commit
+          git commit -m "Sync from ${{ github.event.inputs.source_repo }}"
 
       - name: Force push to main branch
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git push --force https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} temp-sync-branch:main
+          git push --force origin main
