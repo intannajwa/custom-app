@@ -20,6 +20,9 @@ jobs:
           echo "Cloning ${{ github.event.inputs.source_repo }}"
           git clone --depth=1 "${{ github.event.inputs.source_repo }}" external || exit 1
 
+          echo "Cloned files:"
+          ls -al external
+
           if [ ! -d "external" ] || [ -z "$(ls -A external)" ]; then
             echo "❌ Clone failed or repo is empty"
             exit 1
@@ -34,7 +37,8 @@ jobs:
         run: |
           echo "Replacing current repo contents with cloned repo..."
           rm -rf ./* .[^.]* || true
-          mv external/* ./
+          
+          rsync -a external/ ./
           rm -rf external
 
           git add .
