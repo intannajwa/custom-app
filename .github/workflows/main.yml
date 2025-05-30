@@ -1,56 +1,49 @@
-name: Clone and Sync Repo to Main
+name: Clone and Replace Repo Contents
 
 on:
   workflow_dispatch:
     inputs:
       source_repo:
-        description: 'GitHub repo to clone (full URL, e.g. https://github.com/sbwml/luci-app-filemanager.git)'
+        description: 'GitHub repo URL to clone (e.g. https://github.com/sbwml/luci-app-filemanager.git)'
         required: true
         default: 'https://github.com/sbwml/luci-app-filemanager.git'
 
 jobs:
-  clone_and_push:
+  sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout your current repository
+      - name: Checkout current repository (needed for git commands)
         uses: actions/checkout@v3
 
-      - name: Clone input repository to temp directory
+      - name: Clone source repo to temp directory
         run: |
-          set -e
-          echo "Cloning repo: ${{ github.event.inputs.source_repo }}"
           tempdir=$(mktemp -d)
+          echo "Cloning repo: ${{ github.event.inputs.source_repo }}"
           git clone --depth=1 "${{ github.event.inputs.source_repo }}" "$tempdir"
-
-          echo "Listing contents of cloned repo:"
+          echo "Cloned repo contents:"
           ls -la "$tempdir"
+          echo "::set-output name=tempdir::$tempdir"
+        id: clone
 
-          if [ -z "$(ls -A "$tempdir")" ]; then
-            echo "❌ Repo is empty or failed to clone."
-            exit 1
-          fi
-
-          echo "Removing all current repo files..."
-          rm -rf ./* .[^.]* || true
-
-          echo "Copying files from cloned repo to current repo..."
-          rsync -a "$tempdir"/ ./
-
-      - name: Configure Git for commit
+      - name: Create orphan branch and replace contents
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Create orphan branch with no history
+          git checkout --orphan temp-sync-branch
 
-      - name: Commit changes (if any)
-        run: |
+          # Remove all files from the index (not from disk)
+          git rm -rf . || true
+
+          # Copy cloned files from tempdir to current directory
+          rsync -a --delete "${{ steps.clone.outputs.tempdir }}/" ./
+
+          # Stage all files
           git add .
-          git commit -m "Sync from ${{ github.event.inputs.source_repo }}" || echo "Nothing to commit"
 
-      - name: Repack Git objects to fix potential push issues
-        run: git repack -a -d
+          # Commit changes
+          git commit -m "Sync from ${{ github.event.inputs.source_repo }} (orphan branch)"
 
-      - name: Force push to main branch
+      - name: Force push orphan branch to main
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git push --force https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} HEAD:main
+          git push --force https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} temp-sync-branch:main
