@@ -28,3 +28,41 @@ The `luci-app-mttl` is a LuCI application for OpenWRT that allows users to modif
 3. Set the desired TTL value for your network traffic.
 4. Apply the settings to modify the TTL for packets passing through the router.
 
+## 📄 Changelog: **TTL Changer v1.2**
+
+**Release Date:** 2025-06-04
+
+### ✨ New Features
+
+* **🔍 Auto-Detection of Config File:**
+  Now automatically detects the appropriate `.nft` configuration file path under `/etc/nftables.d/`, eliminating the need to hardcode `10-custom-filter-chains.nft`. Falls back gracefully if multiple files are found or none exist.
+
+* **🧠 Smarter Rule Generation:**
+
+  * Generates and applies `nftables` rules based on mode: `off`, `64`, or `custom`.
+  * Adds or comments out chains dynamically according to user selection.
+  * Supports both IPv4 (`ip ttl set`) and IPv6 (`ip6 hoplimit set`) in `prerouting` and `postrouting` chains.
+
+* **💬 Improved LuCI UI Guidance:**
+
+  * Instructions and reboot button included in the UI.
+  * Links to developer Telegram and website for easy support access.
+
+### 🛠 Improvements
+
+* **Code Cleanup & Refactoring:**
+
+  * Modular `get_chain()` function now auto-handles both rule application and comment toggling.
+  * More robust UCI defaults initialization on first run.
+
+* **Reliability Boost:**
+
+  * Auto-restarts `nftables` only after cleanly updating rule file.
+  * Ensures newline formatting to prevent config corruption.
+
+### 🐛 Bug Fixes
+
+* Fixed an issue where previously written rules were not being properly removed.
+* Corrected rule logic that could incorrectly trigger skips during parsing of the config file.
+
+
