@@ -18,19 +18,33 @@ if not config_file then
     fs.writefile(config_file, "# TTLChanger rules will go here\n")
 end
 
+-- Clean up /etc/nftables.conf to prevent duplicates
 local main_nft_conf = "/etc/nftables.conf"
 local include_line = 'include "' .. config_file .. '"'
 local nft_conf_data = fs.readfile(main_nft_conf) or ""
-if not nft_conf_data:match(include_line) then
-    nft_conf_data = nft_conf_data .. "\n" .. include_line .. "\n"
-    fs.writefile(main_nft_conf, nft_conf_data)
+
+local seen = {}
+local cleaned_lines = {}
+
+for line in nft_conf_data:gmatch("[^\r\n]+") do
+    if not seen[line] then
+        table.insert(cleaned_lines, line)
+        seen[line] = true
+    end
 end
 
+-- Add include line if not already present
+if not seen[include_line] then
+    table.insert(cleaned_lines, include_line)
+end
+
+fs.writefile(main_nft_conf, table.concat(cleaned_lines, "\n") .. "\n")
+
+-- LuCI UI part
 local m = Map("ttlchanger", "TTL Changer", [[
 Configure TTL or Hop Limit values for outgoing packets. 
 Changing TTL may help bypass certain ISP restrictions.
 ]])
-
 
 if not uci:get_first("ttlchanger", "ttl") then
     uci:section("ttlchanger", "ttl", nil, { mode = "off", custom_value = "64" })
@@ -57,7 +71,6 @@ author.rawhtml = true
 author.value = [[
 <a href="https://t.me/dotycat" target="_blank">@dotycat</a> | <a href="https://dotycat.com" target="_blank">dotycat.com</a>
 ]]
-
 
 function m.on_commit(map)
     local mode_val = uci:get("ttlchanger", "@ttl[0]", "mode") or "off"
@@ -107,9 +120,13 @@ function m.on_commit(map)
     end
 
     fs.writefile(config_file, updated .. "\n" .. new_rules .. "\n")
+
+    -- Restart services
     sys.call("/etc/init.d/nftables restart")
     sys.call("/etc/init.d/firewall restart")
     sys.call("/etc/init.d/network restart")
+
+    -- Optional: Reset USB modem (e.g., for LTE devices)
     sys.call('echo -e "AT+CFUN=1,1\\r" > /dev/ttyUSB3')
 end
 
