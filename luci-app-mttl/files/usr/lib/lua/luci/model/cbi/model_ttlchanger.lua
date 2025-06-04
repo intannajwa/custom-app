@@ -2,8 +2,35 @@ local fs = require "nixio.fs"
 local uci = require "luci.model.uci".cursor()
 local sys = require "luci.sys"
 
-local config_file = "/etc/nftables.d/10-custom-filter-chains.nft"
-local m = Map("ttlchanger", "TTL Changer", "Configure IPv4 TTL and IPv6 Hop Limit manipulation through nftables.")
+local config_dir = "/etc/nftables.d"
+local config_file = nil
+
+for file in fs.dir(config_dir) or {} do
+    if file:match("%.nft$") then
+        config_file = config_dir .. "/" .. file
+        break
+    end
+end
+
+if not config_file then
+    fs.mkdirr(config_dir)
+    config_file = config_dir .. "/ttlchanger.nft"
+    fs.writefile(config_file, "# TTLChanger rules will go here\n")
+end
+
+local main_nft_conf = "/etc/nftables.conf"
+local include_line = 'include "' .. config_file .. '"'
+local nft_conf_data = fs.readfile(main_nft_conf) or ""
+if not nft_conf_data:match(include_line) then
+    nft_conf_data = nft_conf_data .. "\n" .. include_line .. "\n"
+    fs.writefile(main_nft_conf, nft_conf_data)
+end
+
+local m = Map("ttlchanger", "TTL Changer", [[
+Configure TTL or Hop Limit values for outgoing packets. 
+Changing TTL may help bypass certain ISP restrictions.
+]])
+
 
 if not uci:get_first("ttlchanger", "ttl") then
     uci:section("ttlchanger", "ttl", nil, { mode = "off", custom_value = "64" })
@@ -19,54 +46,41 @@ mode:value("off", "Off")
 mode:value("64", "Force TTL to 64")
 mode:value("custom", "Set Custom TTL")
 
-local custom_ttl = s:option(Value, "custom_value", "Custom TTL Value")
-custom_ttl.datatype = "uinteger"
-custom_ttl.default = "65"
-custom_ttl:depends("mode", "custom")
+local custom = s:option(Value, "custom_value", "Custom TTL Value")
+custom.datatype = "uinteger"
+custom.default = "65"
+custom:depends("mode", "custom")
+custom.description = "Enter a custom TTL/Hop Limit value (e.g., 64 or 65)"
 
-local html_table = s:option(DummyValue, "_html_table", "")
-html_table.rawhtml = true
-html_table.value = [[
-<table class="table table-striped">
-  <tr>
-    <td><strong>How to use?</strong></td>
-    <td>After making changes, click <strong>Save & Apply</strong> and then click the <strong>Reboot Now</strong> button to apply the changes.</td>
-  </tr>
-  <tr>
-    <td><strong>Reboot</strong></td>
-    <td>
-      <form method="post">
-        <input class="cbi-button cbi-button-apply" type="submit" name="cbi.reboot" value="Reboot Now" />
-      </form>
-    </td>
-  </tr>
-  <tr>
-    <td><strong>Developed by</strong></td>
-    <td><a href="https://t.me/dotycat" target="_blank">@dotycat</a> | <a href="https://dotycat.com" target="_blank">dotycat.com</a></td>
-  </tr>
-</table>
+local author = s:option(DummyValue, "_author", "Developed by")
+author.rawhtml = true
+author.value = [[
+<a href="https://t.me/dotycat" target="_blank">@dotycat</a> | <a href="https://dotycat.com" target="_blank">dotycat.com</a>
 ]]
 
-if luci.http.formvalue("cbi.reboot") then
-    sys.call("/sbin/reboot")
-end
 
 function m.on_commit(map)
     local mode_val = uci:get("ttlchanger", "@ttl[0]", "mode") or "off"
     local custom_val = tonumber(uci:get("ttlchanger", "@ttl[0]", "custom_value")) or 64
     local ttl = (mode_val == "custom") and custom_val or 64
+    local comment = (mode_val == "off")
 
     local function get_chain(name, rule)
-        return string.format([[ 
-chain %s {
-  type filter hook %s priority 300; policy accept;
-  counter%s
-}
-]], name, name:match("prerouting") and "prerouting" or "postrouting", rule and (" " .. rule) or "")
+        local lines = {
+            string.format("chain %s {", name),
+            string.format("  type filter hook %s priority 300; policy accept;", name:match("prerouting") and "prerouting" or "postrouting"),
+            "  counter",
+            "  " .. rule,
+            "}"
+        }
+        if comment then
+            for i, l in ipairs(lines) do lines[i] = "# " .. l end
+        end
+        return table.concat(lines, "\n")
     end
 
-    local ttl_rule = (mode_val ~= "off") and ("ip ttl set " .. ttl) or nil
-    local hop_rule = (mode_val ~= "off") and ("ip6 hoplimit set " .. ttl) or nil
+    local ttl_rule = "ip ttl set " .. ttl
+    local hop_rule = "ip6 hoplimit set " .. ttl
 
     local new_rules = table.concat({
         get_chain("mangle_prerouting_ttl64", ttl_rule),
@@ -76,12 +90,11 @@ chain %s {
     }, "\n")
 
     local original = fs.readfile(config_file) or ""
-    local result = {}
-    local skip = false
+    local result, skip = {}, false
     for line in original:gmatch("[^\r\n]+") do
-        if line:match("^chain mangle_.*ttl") or line:match("^chain mangle_.*hoplimit") then
+        if line:match("^#?%s*chain mangle_.*ttl") or line:match("^#?%s*chain mangle_.*hoplimit") then
             skip = true
-        elseif skip and line:match("^}") then
+        elseif skip and line:match("^#?%s*}") then
             skip = false
         elseif not skip then
             table.insert(result, line)
@@ -95,6 +108,9 @@ chain %s {
 
     fs.writefile(config_file, updated .. "\n" .. new_rules .. "\n")
     sys.call("/etc/init.d/nftables restart")
+    sys.call("/etc/init.d/firewall restart")
+    sys.call("/etc/init.d/network restart")
+    sys.call('echo -e "AT+CFUN=1,1\\r" > /dev/ttyUSB3')
 end
 
 return m
