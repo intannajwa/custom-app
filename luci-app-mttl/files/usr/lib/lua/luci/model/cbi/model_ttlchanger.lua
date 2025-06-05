@@ -120,13 +120,8 @@ function m.on_commit(map)
     end
 
     fs.writefile(config_file, updated .. "\n" .. new_rules .. "\n")
-
-    -- Restart services
-    sys.call("/etc/init.d/nftables restart")
     sys.call("/etc/init.d/firewall restart")
     sys.call("/etc/init.d/network restart")
-
-    -- Optional: Reset USB modem (e.g., for LTE devices)
     sys.call('echo -e "AT+CFUN=1,1\\r" > /dev/ttyUSB3')
 end
 
